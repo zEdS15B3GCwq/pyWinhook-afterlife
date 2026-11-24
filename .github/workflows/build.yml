@@ -1,0 +1,53 @@
+---
+# SPDX-License-Identifier: MIT
+#
+# Automatically builds pyWinhook for all discovered CPython major versions >=3.12,
+# then publishes them to PyPI. Or maybe 3.9+ since those are flagged as suspicious
+# by PyPI.
+
+name: Build
+
+on:
+  #  schedule:
+  #    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build everything again
+        type: boolean
+        default: false
+      release:
+        description: Publish a new GitHub release
+        type: boolean
+        default: false
+      publish:
+        description: Publish to PyPI
+        type: boolean
+        default: false
+
+# Pull requests: called by precommit.yml once the hooks pass.
+# workflow_call:
+#   inputs:
+#     force:
+#       type: boolean
+#       default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  resolve:
+    name: Dummy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dummy
+        run: echo hello world
