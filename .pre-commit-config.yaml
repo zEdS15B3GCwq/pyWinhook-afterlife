@@ -69,3 +69,9 @@ repos:
       - id: check-github-workflows
         args: ["--verbose"]
       - id: check-dependabot
+
+  # Check markdown files
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: bf6d1792b8bc7f6cc93f10cc27735a4cb0c38e47  # frozen: v0.50.1
+    hooks:
+      - id: markdownlint
