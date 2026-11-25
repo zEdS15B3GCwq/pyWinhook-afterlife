@@ -201,6 +201,7 @@ jobs:
           UV_PYTHON_REQUEST: ${{ matrix.uv_python }}
           CP: ${{ matrix.cp }}
           PLAT: ${{ matrix.plat }}
+          UV_LINK_MODE: 'copy'
         run: |
           uv venv --clear --python "$UV_PYTHON_REQUEST" venv
           uv pip install --python venv/Scripts/python.exe dist/pywinhook-*-"$CP"-"$CP"-"$PLAT".whl
@@ -210,6 +211,7 @@ jobs:
         env:
           UV_PYTHON_REQUEST: ${{ matrix.uv_python }}
           PLAT: ${{ matrix.plat }}
+          UV_LINK_MODE: 'copy'
         run: |
           uv venv --clear --python "$UV_PYTHON_REQUEST" venv
           uv pip install --python venv/Scripts/python.exe dist/pywinhook-*-cp311-abi3-"$PLAT".whl
