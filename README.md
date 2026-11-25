@@ -30,7 +30,7 @@ merged in the future.
 ## Fixes and changes
 
 pyWinhook uses the legacy Python 2 functions `PyInt_Aslong(x)` that do not
-exist on Python 3. It only used to work because older versions of SWIG defined
+exist in Python 3. It only used to work because older versions of SWIG defined
 Python 3 aliases for these functions, but those were removed in SWIG versions
 4.5.0 and later.
 
