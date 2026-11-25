@@ -19,9 +19,9 @@ modifications to the source other than the fixes.
 
 The _afterlife_ postfix in the project name was chosen to reflect that the
 pyWinhook repository has been inactive (dead?) for a while now, and this
-project does not intend to revive it, beyond the scope of making installation
-possible. The wheels here are built from the same source code as the original,
-and as such, any issues beyond installation are out of scope for this project.
+project does not intend to revive it, beyond making installation possible. The
+wheels here are built from the same source code as the original, and as such,
+any issues beyond installation are out of scope for this project.
 
 pyWinhook has a recent PR ([#21](https://github.com/Tungsteno74/pyWinhook/pull/21))
 which applies the same fix plus adds a `pyproject.toml`. Perhaps it will be
