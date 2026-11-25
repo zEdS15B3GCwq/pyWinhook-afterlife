@@ -181,10 +181,12 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.resolve.outputs.test) }}
     steps:
+      # Nothing is checked out here, and setup-uv warns about the empty workspace.
       - name: Set up uv
         uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
         with:
           enable-cache: false
+          ignore-empty-workdir: true
 
       - name: Download wheels for ${{ matrix.plat }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
