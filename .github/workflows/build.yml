@@ -1,53 +1,271 @@
 ---
 # SPDX-License-Identifier: MIT
 #
-# Automatically builds pyWinhook for all discovered CPython major versions >=3.12,
-# then publishes them to PyPI. Or maybe 3.9+ since those are flagged as suspicious
-# by PyPI.
+# resolve -> build -> test -> release
+#
+# Builds pyWinhook wheels for Windows (x64, x86, ARM64) from pinned commits of the fork
+# below: one for every stable CPython minor version since 3.11 (not free-threaded), and one
+# abi3 wheel (CPython 3.11 and later). Pythons are installed with uv, which also decides
+# which versions exist (scripts/resolve.py). Every wheel is installed and imported on its
+# own Python version, and the abi3 wheels on every version.
+#
+# Every release contains the full set of wheels, and is tagged with the date.
+#
+# Run manually (Actions tab -> Build -> Run workflow):
+# - Without options: builds and tests everything if a wheel is missing from our releases
+#   (i.e. a new CPython version is out), otherwise it does nothing. Doesn't publish.
+# - "force": builds and tests everything, even if all wheels have been released.
+# - "release": also publishes a GitHub release with the wheels. Only on main; elsewhere the
+#   wheels are only available as the run's artifacts. With "force", this re-releases.
+#
+# A failed build or test stops the release; nothing is published.
+#
+# - Changing a pinned commit (FIX_REF, ABI3_REF): update the README links too, and run
+#   with "force" and "release", since the wheel names stay the same.
+# - Updating SWIG or the build tools: change the versions below.
+# - uv itself isn't pinned: setup-uv installs the latest release, which knows the latest
+#   CPython versions.
+#
+# The code being built only runs in jobs with a read-only token. The build jobs can sign
+# attestations (id-token), but only when the run releases. The release job, which can
+# write, runs no third-party code and doesn't check out any code.
 
 name: Build
 
 on:
-  #  schedule:
-  #    - cron: "17 4 * * *"
   workflow_dispatch:
     inputs:
       force:
-        description: Build everything again
+        description: Build and test everything, even if already released
         type: boolean
         default: false
       release:
-        description: Publish a new GitHub release
+        description: Publish a GitHub release (main only)
         type: boolean
         default: false
-      publish:
-        description: Publish to PyPI
-        type: boolean
-        default: false
-
-# Pull requests: called by precommit.yml once the hooks pass.
-# workflow_call:
-#   inputs:
-#     force:
-#       type: boolean
-#       default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: build
+  cancel-in-progress: false
 
 defaults:
   run:
     shell: bash
 
+env:
+  SRC_REPO: zEdS15B3GCwq/pyWinhook
+  FIX_REF: 1afa209973a0d795ab2015732e76dd8099a5ca74  # branch fix
+  ABI3_REF: 63dc0e69cb279a133629314cf5ac5aa121f869d5  # branch fix-abi3
+  SWIG_VERSION: 4.5.1
+  BUILD_VERSION: 1.6.1
+  SETUPTOOLS_VERSION: 84.2.1
+  # Only Pythons installed by uv, never the runner's own.
+  UV_MANAGED_PYTHON: "1"
+  PYTHONUNBUFFERED: "1"
+  PYTHONUTF8: "1"
+
 jobs:
   resolve:
-    name: Dummy
+    name: Find targets
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      build: ${{ steps.resolve.outputs.build }}
+      test: ${{ steps.resolve.outputs.test }}
+      versions: ${{ steps.resolve.outputs.versions }}
+      run: ${{ steps.resolve.outputs.run }}
+      publish: ${{ steps.resolve.outputs.publish }}
+      tag: ${{ steps.resolve.outputs.tag }}
     steps:
-      - name: Dummy
-        run: echo hello world
+      - name: Check out build scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          enable-cache: false
+
+      - name: Compare available Pythons with our releases
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
+          RELEASE: ${{ inputs.release }}
+        run: uv run --no-project scripts/resolve.py
+
+  build:
+    name: Build ${{ matrix.wheel_tag }}
+    needs: resolve
+    if: needs.resolve.outputs.run == 'true'
+    # x86 builds run on x64. ARM64 builds run natively.
+    runs-on: ${{ matrix.arch == 'arm64' && 'windows-11-arm' || 'windows-2025' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.build) }}
+    steps:
+      - name: Check out pyWinhook
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ env.SRC_REPO }}
+          ref: ${{ matrix.abi3 && env.ABI3_REF || env.FIX_REF }}
+          path: src
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          enable-cache: false
+
+      # SWIG is a build tool, independent of the target Python. PyPI has no 32-bit SWIG,
+      # so it always runs on a Python of the runner's own architecture.
+      - name: Install SWIG
+        env:
+          NATIVE: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}
+        run: |
+          uv tool install --python "cpython-3.15-windows-$NATIVE-none" "swig==$SWIG_VERSION"
+          uv tool dir --bin >> "$GITHUB_PATH"
+
+      - name: Set up Python ${{ matrix.python }} ${{ matrix.arch }}
+        env:
+          UV_PYTHON_REQUEST: ${{ matrix.uv_python }}
+        run: |
+          uv venv --python "$UV_PYTHON_REQUEST" "$RUNNER_TEMP/venv"
+          echo "VIRTUAL_ENV=$RUNNER_TEMP/venv" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/venv/Scripts" >> "$GITHUB_PATH"
+
+      - name: Build wheel
+        env:
+          WHEEL_TAG: ${{ matrix.wheel_tag }}
+        run: |
+          uv pip install "build==$BUILD_VERSION" "setuptools==$SETUPTOOLS_VERSION"
+          swig -version
+          python -VV
+          python -m build --wheel --no-isolation --outdir dist src
+          # Exactly one wheel, with the expected tags.
+          wheels=(dist/*.whl)
+          ls -l "${wheels[@]}"
+          [[ ${#wheels[@]} == 1 && ${wheels[0]} == dist/pywinhook-*-"$WHEEL_TAG".whl ]]
+
+      - name: Attest build provenance
+        if: needs.resolve.outputs.publish == 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
+        with:
+          subject-path: dist/*.whl
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: wheel-${{ matrix.wheel_tag }}
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 14
+
+  test:
+    name: Test ${{ matrix.python }} ${{ matrix.arch }}
+    needs: [resolve, build]
+    # x86 Python runs on x64. ARM64 Python needs ARM64 (not x64 under emulation).
+    runs-on: ${{ matrix.arch == 'arm64' && 'windows-11-arm' || 'windows-2025' }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.test) }}
+    steps:
+      # Nothing is checked out here, and setup-uv warns about the empty workspace.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
+        with:
+          enable-cache: false
+          ignore-empty-workdir: true
+
+      - name: Download wheels for ${{ matrix.plat }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: wheel-*-${{ matrix.plat }}
+          path: dist
+          merge-multiple: true
+
+      # Each wheel is installed into a new virtual environment, so nothing is left over
+      # from the other one. uv refuses wheels whose tags don't match the Python. The
+      # dependency (pywin32) comes from PyPI, as it would for users.
+      - name: Install and import the ${{ matrix.cp }} wheel
+        env:
+          UV_PYTHON_REQUEST: ${{ matrix.uv_python }}
+          CP: ${{ matrix.cp }}
+          PLAT: ${{ matrix.plat }}
+          UV_LINK_MODE: 'copy'
+        run: |
+          uv venv --clear --python "$UV_PYTHON_REQUEST" venv
+          uv pip install --python venv/Scripts/python.exe dist/pywinhook-*-"$CP"-"$CP"-"$PLAT".whl
+          venv/Scripts/python.exe -c "import pyWinhook; pyWinhook.HookManager()"
+
+      - name: Install and import the abi3 wheel
+        env:
+          UV_PYTHON_REQUEST: ${{ matrix.uv_python }}
+          PLAT: ${{ matrix.plat }}
+          UV_LINK_MODE: 'copy'
+        run: |
+          uv venv --clear --python "$UV_PYTHON_REQUEST" venv
+          uv pip install --python venv/Scripts/python.exe dist/pywinhook-*-cp311-abi3-"$PLAT".whl
+          venv/Scripts/python.exe -c "import pyWinhook; pyWinhook.HookManager()"
+
+  release:
+    name: Publish release
+    needs: [resolve, build, test]
+    if: needs.resolve.outputs.publish == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+
+      - name: Write checksums and release notes
+        env:
+          VERSIONS: ${{ needs.resolve.outputs.versions }}
+        run: |
+          (cd dist && sha256sum -- *.whl > SHA256SUMS && cat SHA256SUMS)
+          compare="https://github.com/Tungsteno74/pyWinhook/compare/master...${SRC_REPO/\//:}"
+          cat > notes.md <<EOF
+          pyWinhook wheels for Windows (x64, x86, ARM64):
+
+          - CPython $VERSIONS, version-specific wheels, built from
+            [\`${FIX_REF:0:7}\`]($compare:$FIX_REF) (branch \`fix\`)
+          - CPython 3.11 and later, abi3 wheels, built from
+            [\`${ABI3_REF:0:7}\`]($compare:$ABI3_REF) (branch \`fix-abi3\`)
+
+          Built with SWIG $SWIG_VERSION, setuptools $SETUPTOOLS_VERSION and build $BUILD_VERSION.
+
+          Each wheel has a signed attestation, which can be checked with:
+
+              gh attestation verify <file> --repo $GITHUB_REPOSITORY
+          EOF
+          cat notes.md
+
+      # gh uploads to a draft and publishes only when all assets are in place.
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          gh release create "$TAG" dist/*.whl dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "pyWinhook wheels $TAG" \
+            --notes-file notes.md \
+            --latest

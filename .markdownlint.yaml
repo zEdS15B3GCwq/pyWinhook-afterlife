@@ -1,0 +1,4 @@
+---
+# Commands in code blocks often can't be wrapped.
+MD013:
+  code_blocks: false
