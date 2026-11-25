@@ -1,0 +1,32 @@
+---
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "[dependabot] "
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      hooks:
+        patterns: ["*"]
+    commit-message:
+      prefix: "[dependabot] "
+    cooldown:
+      default-days: 7
+    ignore:
+      # The typos repo also tags its other crates; varcon-core-v5.x is read as typos 5.x.
+      # Dependabot picks them up and replaces typos with incorrect tags.
+      # Revisit this after a major version update for typos.
+      - dependency-name: "*crate-ci/typos*"
+        versions: [">= 2"]
